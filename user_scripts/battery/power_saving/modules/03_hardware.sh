@@ -13,8 +13,12 @@ else
     log_warn "brightnessctl not found."
 fi
 
-# 2. ASUS Profile
-run_external_script "${ASUS_PROFILE_SCRIPT}" "Applying Quiet Profile & KB Lights..."
+# 2. Vendor Specifics (ASUS)
+# Only runs if 'asusctl' is installed on the system
+if has_cmd asusctl; then
+    # We use '|| true' to ensure a profile failure doesn't crash the script
+    run_external_script "${ASUS_PROFILE_SCRIPT}" "Applying Quiet Profile..." || true
+fi
 
 # 3. Volume Cap
 if has_cmd wpctl; then

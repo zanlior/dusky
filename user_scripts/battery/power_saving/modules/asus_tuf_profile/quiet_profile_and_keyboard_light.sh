@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ASUS TUF Quiet Profile & Keyboard Backlight Control
+# Hardware Profile Control (ASUS)
 # -----------------------------------------------------------------------------
 
 # Exit early if asusctl not installed

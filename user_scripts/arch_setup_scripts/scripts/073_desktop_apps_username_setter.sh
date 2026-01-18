@@ -76,6 +76,7 @@ readonly TARGET_FILES=(
     "opacity_blur_shadow.desktop"
     "openssh.desktop"
     "powersave.desktop"
+    "powersave_off.desktop"
     "process_terminator.desktop"
     "relink_github_repo.desktop"
     "rotate_screen_clockwise.desktop"

@@ -3,14 +3,13 @@
 # -----------------------------------------------------------------------------
 set -uo pipefail
 
-# --- Pre-flight Checks (BEFORE sourcing anything) ---
+# --- Pre-flight Checks ---
 if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
     printf 'Error: Bash 4.4+ required (found: %s)\n' "${BASH_VERSION}" >&2
     exit 1
 fi
 
 # --- Environment Setup ---
-# robustly find the directory of THIS script
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 readonly LIB_DIR="${SCRIPT_DIR}/lib"
 readonly MODULES_DIR="${SCRIPT_DIR}/modules"
@@ -48,9 +47,10 @@ run_module() {
 # INTERACTIVE PROMPTS
 # =============================================================================
 clear
+# Generic Header for Public Use
 gum style --border double --margin "1" --padding "1 2" \
     --border-foreground 212 --foreground 212 \
-    "ASUS TUF F15: POWER SAVER MASTER"
+    "SYSTEM POWER SAVER"
 
 # Theme prompt
 export POWER_SAVER_THEME="false"
@@ -86,7 +86,6 @@ if sudo -v; then
     export SUDO_AUTHENTICATED=true
 
     # --- SUDO KEEPALIVE ---
-    # Updates sudo timestamp in background so it doesn't expire during long scripts
     while true; do sudo -n true; sleep 50; kill -0 "$$" || exit; done 2>/dev/null &
     SUDO_KEEPALIVE_PID=$!
     trap 'kill ${SUDO_KEEPALIVE_PID} 2>/dev/null' EXIT

@@ -91,7 +91,7 @@ target_wallpaper="${wallpapers[RANDOM % ${#wallpapers[@]}]}"
 swww img "$target_wallpaper" "${SWWW_OPTS[@]}"
 
 # Generate color scheme asynchronously (setsid fully detaches the process)
-    setsid uwsm-app -- matugen --mode dark --type scheme-fruit-salad image "$target_wallpaper" \
+    setsid uwsm-app -- matugen --mode dark image "$target_wallpaper" \
     >/dev/null 2>&1 &
 
 exit 0
