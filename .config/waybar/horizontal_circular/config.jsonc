@@ -18,8 +18,7 @@
         "pulseaudio"
     ],
     "modules-right": [
-        "network",
-        "bluetooth",
+        "custom/net-speed",
         "battery",
         "custom/notification"
     ],
@@ -99,22 +98,8 @@
 
     // === MODULES: LEFT ===
     "hyprland/workspaces": {
-        "format": "{icon}",
+        "format": "",
         "on-click": "activate",
-        // UPDATED: Replaced Chinese numerals with Roman Numerals supported by JetBrains Mono
-        "format-icons": {
-            "1": "I",
-            "2": "II",
-            "3": "III",
-            "4": "IV",
-            "5": "V",
-            "6": "VI",
-            "7": "VII",
-            "8": "VIII",
-            "9": "IX",
-            "10": "X",
-            "default": ""
-        },
         "persistent-workspaces": {
             "*": 5
         }
@@ -146,25 +131,12 @@
     },
 
     // === MODULES: RIGHT ===
-    "network": {
-        "format-wifi": "{icon}",
-        "format-ethernet": "󰈀",
-        "format-disconnected": "󰖪",
-        "format-disabled": "󰖪",
-        "format-icons": ["󰤯", "󰤟", "󰤢", "󰤥", "󰤨"],
-        "tooltip-format-wifi": "{essid} ({signalStrength}%)\n{ipaddr}",
-        "tooltip-format-ethernet": "{ipaddr}/{cidr}",
-        "tooltip-format-disconnected": "No Connection",
-        "on-click": "kitty --class wifitui -e wifitui",
-        "on-click-right": "systemctl restart network_meter.service"
-    },
-    "bluetooth": {
-        "format": "󰂯 {status}",
-        "format-disabled": "󰂲 Off",
-        "format-connected": "󰂱 {device_alias}",
-        "tooltip-format": "{status}",
-        "on-click": "blueman-manager",
-        "on-click-right": "kitty --class bluetui -e bluetui"
+    "custom/net-speed": {
+        "exec": "$HOME/user_scripts/waybar/network/network_meter_calling.sh --horizontal",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "tooltip": true
     },
     "battery": {
         "states": { "warning": 30, "critical": 15 },
