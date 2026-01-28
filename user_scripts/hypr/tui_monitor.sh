@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #══════════════════════════════════════════════════════════════════════════════
-# HyprMonitorWizard v7.4 — Final Production Release
+# HyprMonitorWizard v7.4.1 — Fixed Mode Listing
 # A robust, strictly typed monitor configuration tool for Hyprland.
 #══════════════════════════════════════════════════════════════════════════════
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 #───────────────────────────────────────────────────────────────────────────────
 # CONSTANTS & PATHS
 #───────────────────────────────────────────────────────────────────────────────
-readonly VERSION="7.4"
+readonly VERSION="7.4.1"
 readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr/edit_here"
 # Backups stored in volatile /tmp (cleared on reboot)
 readonly BACKUP_DIR="/tmp/hypr-wizard-backups"
@@ -449,6 +449,22 @@ configure_monitor() {
         done
         [[ "$low_mode" == "preferred" ]] && low_mode="${modes_raw[-1]}"
     fi
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # RESTORED: LIST AVAILABLE MODES (From v5.6)
+    # ══════════════════════════════════════════════════════════════════════════════
+    printf '\n%sAvailable modes for %s:%s\n' "$CYN" "$name" "$RST" >&2
+    if (( ${#modes_raw[@]} > 0 )); then
+        local idx=1
+        for m in "${modes_raw[@]}"; do
+            printf '  %2d) %s\n' "$idx" "$m" >&2
+            ((idx++))
+        done
+        printf '\n' >&2
+    else
+        printf '  %s(No specific modes reported by Hyprland)%s\n\n' "$DIM" "$RST" >&2
+    fi
+    # ══════════════════════════════════════════════════════════════════════════════
 
     menu "Resolution & Refresh ($name):" \
         "Preferred (Auto)" \
