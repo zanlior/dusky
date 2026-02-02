@@ -1,17 +1,43 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky TUI Engine - Master Template v2.4
+# Dusky TUI Engine - Master Template v2.5
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM / Wayland
 # Description: High-performance, robust TUI for config modification.
 # Features:
 #   - Secure `sed` Injection Prevention
 #   - Nested Block Support (Fixes "Range Trap")
+#   - Multiple Same-Name Block Support (Fixes "First Block Trap")
 #   - Locale Safe (Fixes "Comma Bomb")
+#   - Hyphen-Safe Pattern Escaping
 #   - Terminal State Preservation (stty)
 #   - Scrollable Viewport with Indicators
 #   - Mouse Support (SGR 1006) with Scroll Wheel
 #   - Page Up/Down, Home/End Navigation
+#   - Visual "Unset" Detection for Debugging
+# -----------------------------------------------------------------------------
+# KNOWN EDGE CASES & FIXES:
+#
+# 1. "Locale Bomb" - Non-US locales make awk output "0,5" instead of "0.5"
+#    FIX: export LC_NUMERIC=C at script start
+#
+# 2. "Nested Block Range Trap" - sed range /block/,/}/ stops at ANY }, breaking
+#    nested configs like: decoration { blur { ... } shadow_color = x }
+#    FIX: Count braces to find exact block boundaries
+#
+# 3. "First Block Trap" (NEW) - Config files can have MULTIPLE blocks with the
+#    same name (e.g., multiple `input {}` blocks for organization). The old
+#    code used `head -n1` to get only the first block, ignoring keys in later
+#    blocks with the same name.
+#    FIX: Iterate through ALL block instances and find the one containing the key
+#
+# 4. "Hyphen Pattern Trap" - Keys like `tap-to-click` need hyphen escaping in
+#    sed patterns, otherwise `-` can be misinterpreted in character classes.
+#    FIX: Escape hyphens in escape_sed_pattern()
+#
+# 5. "Silent Failure Trap" - If a key isn't found, the old code silently did
+#    nothing, making debugging difficult.
+#    FIX: Return status from write functions, show "⚠ UNSET" in UI
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -28,7 +54,7 @@ export LC_NUMERIC=C
 
 readonly CONFIG_FILE="${HOME}/.config/hypr/change_me.conf"
 readonly APP_TITLE="Dusky Template"
-readonly APP_VERSION="v2.4"
+readonly APP_VERSION="v2.5"
 
 # Dimensions & Layout
 declare -ri MAX_DISPLAY_ROWS=14      # Rows of items to show before scrolling
@@ -41,6 +67,17 @@ readonly -a TABS=("General" "Input" "Display" "Misc")
 
 # Item Registration
 # Syntax: register <tab_idx> "Label" "config_str" "DEFAULT_VALUE"
+#
+# config_str format: "key|type|block|min|max|step"
+#   - key:   The config key name (e.g., "sensitivity", "tap-to-click")
+#   - type:  bool, int, float, or cycle
+#   - block: The block name containing this key (e.g., "input", "touchpad")
+#            NOTE: If your config has MULTIPLE blocks with the same name,
+#            the engine will search ALL of them to find the key.
+#   - min:   For int/float: minimum value. For cycle: comma-separated options
+#   - max:   For int/float: maximum value. For cycle: unused
+#   - step:  For int/float: increment step. For cycle: unused
+#
 register_items() {
     register 0 "Enable Logs"    'logs_enabled|bool|general|||'       "true"
     register 0 "Timeout (ms)"   'timeout|int|general|0|1000|50'      "100"
@@ -65,6 +102,7 @@ readonly C_CYAN=$'\033[1;36m'
 readonly C_GREEN=$'\033[1;32m'
 readonly C_MAGENTA=$'\033[1;35m'
 readonly C_RED=$'\033[1;31m'
+readonly C_YELLOW=$'\033[1;33m'
 readonly C_WHITE=$'\033[1;37m'
 readonly C_GREY=$'\033[1;30m'
 readonly C_INVERSE=$'\033[7m'
@@ -78,8 +116,10 @@ readonly MOUSE_ON=$'\033[?1000h\033[?1002h\033[?1006h'
 readonly MOUSE_OFF=$'\033[?1000l\033[?1002l\033[?1006l'
 
 # Timeout for reading escape sequences (in seconds)
-# FIX: removed invalid -r flag from readonly
 readonly ESC_READ_TIMEOUT=0.02
+
+# Internal marker for unset values (uses Unicode to avoid collision with real values)
+readonly UNSET_MARKER='«unset»'
 
 # --- State Management ---
 declare -i SELECTED_ROW=0
@@ -140,6 +180,7 @@ escape_sed_pattern() {
     local -n __out=$2
     local _s=$1
     # Escape BRE metacharacters: \ . * [ ^ $ AND delimiter |
+    # FIX: Also escape hyphens for keys like "tap-to-click"
     _s=${_s//\\/\\\\}
     _s=${_s//|/\\|}      # CRITICAL: Escape delimiter used in sed command
     _s=${_s//./\\.}
@@ -147,6 +188,7 @@ escape_sed_pattern() {
     _s=${_s//\[/\\[}
     _s=${_s//^/\\^}
     _s=${_s//\$/\\\$}
+    _s=${_s//-/\\-}      # FIX: "Hyphen Pattern Trap" - escape hyphens
     __out=$_s
 }
 
@@ -179,12 +221,14 @@ populate_config_cache() {
     CONFIG_CACHE=()
     local key_part value_part key_name
 
-    while IFS='=' read -r key_part value_part; do
+    # Parse config file with proper block tracking
+    # Output format: "key|block=value"
+    while IFS='=' read -r key_part value_part || [[ -n $key_part ]]; do
         [[ -z $key_part ]] && continue
         CONFIG_CACHE["$key_part"]=$value_part
 
         key_name=${key_part%%|*}
-        # Fallback: only set if unset (first occurrence wins)
+        # Fallback: only set if unset (first occurrence wins for blockless lookup)
         if [[ -z ${CONFIG_CACHE["$key_name|"]:-} ]]; then
             CONFIG_CACHE["$key_name|"]=$value_part
         fi
@@ -222,6 +266,23 @@ populate_config_cache() {
     ' "$CONFIG_FILE")
 }
 
+# -----------------------------------------------------------------------------
+# write_value_to_file - Write a value to the config file
+# -----------------------------------------------------------------------------
+# CRITICAL: This function handles the "First Block Trap"
+#
+# Problem: Config files can have MULTIPLE blocks with the same name:
+#   input { kb_layout = us }      # Block 1
+#   input { sensitivity = 0 }     # Block 2  
+#   input { natural_scroll = true } # Block 3
+#
+# The old code used `grep ... | head -n1` which only found Block 1.
+# If we tried to modify "sensitivity", it would search Block 1, not find it,
+# and silently fail.
+#
+# Solution: Iterate through ALL blocks with the matching name, check which one
+# contains our key, and only modify that specific block.
+# -----------------------------------------------------------------------------
 write_value_to_file() {
     local key=$1 new_val=$2 block=${3:-}
     local current_val=${CONFIG_CACHE["$key|$block"]:-}
@@ -229,69 +290,85 @@ write_value_to_file() {
     # Dirty check: skip write if value unchanged
     [[ "$current_val" == "$new_val" ]] && return 0
 
-    local safe_val safe_key safe_block
+    local safe_val safe_key
     escape_sed_replacement "$new_val" safe_val
     escape_sed_pattern "$key" safe_key
 
     if [[ -n $block ]]; then
+        local safe_block
         escape_sed_pattern "$block" safe_block
         
-        # CRITICAL FIX: The "Nested Block Range Trap"
-        # We cannot rely on sed range /start/,/}/ because it stops at ANY closing brace,
-        # breaking nested configs (e.g., editing a key inside decoration{...} that follows blur{...}).
-        # Instead, we identify the EXACT start and end lines of the block by counting braces.
+        # CRITICAL FIX: The "First Block Trap"
+        # Iterate through ALL block instances, not just the first one.
+        # For each block, check if it contains our key before modifying.
         
-        local start_line
-        # Find the first line where the block starts
-        start_line=$(grep -n "^[[:space:]]*${safe_block}[[:space:]]*{" "$CONFIG_FILE" | head -n1 | cut -d: -f1)
+        local line_num block_start block_end found=0
         
-        if [[ -n $start_line ]]; then
-            local end_line_offset
+        while IFS=: read -r line_num _; do
+            block_start=$line_num
             
-            # Count braces starting from the block line to find the matching closing brace
-            end_line_offset=$(tail -n "+$start_line" "$CONFIG_FILE" | awk '
-                BEGIN { depth=0; found=0 }
+            # CRITICAL FIX: The "Nested Block Range Trap"
+            # Count braces to find exact block boundaries instead of stopping at first }
+            block_end=$(tail -n "+${block_start}" "$CONFIG_FILE" | awk '
+                BEGIN { depth = 0; started = 0 }
                 {
                     txt = $0
-                    sub(/#.*/, "", txt) # Remove comments to avoid false brace counts
-
-                    # Count occurrences of { and }
+                    sub(/#.*/, "", txt)  # Remove comments to avoid false brace counts
+                    
                     n_open = gsub(/{/, "&", txt)
                     n_close = gsub(/}/, "&", txt)
                     
-                    depth += n_open - n_close
+                    if (NR == 1) {
+                        depth = n_open
+                        started = 1
+                    } else {
+                        depth += n_open - n_close
+                    }
                     
-                    # We are in the block once we process the first line (tail guarantees this)
-                    if (NR == 1) found=1
-                    
-                    if (found && depth <= 0) {
+                    if (started && depth <= 0) {
                         print NR
                         exit
                     }
                 }
             ')
             
-            if [[ -n $end_line_offset ]]; then
-                local -i real_end_line=$(( start_line + end_line_offset - 1 ))
+            # Skip if we couldn't determine block end
+            [[ -z $block_end ]] && continue
+            
+            local -i real_end=$(( block_start + block_end - 1 ))
+            
+            # Check if THIS specific block instance contains our key
+            # This is the key fix for multiple same-name blocks
+            if sed -n "${block_start},${real_end}p" "$CONFIG_FILE" | \
+               grep -q "^[[:space:]]*${safe_key}[[:space:]]*="; then
                 
-                # Apply substitution ONLY within the strictly calculated range
-                # Robust sed: uses | delimiter, follows symlinks
+                # Found it! Apply substitution ONLY to this block range
                 sed --follow-symlinks -i \
-                    "${start_line},${real_end_line}s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)\([^#]*\)|\1${safe_val} |" \
+                    "${block_start},${real_end}s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)[^#]*|\1${safe_val} |" \
                     "$CONFIG_FILE"
+                found=1
+                break
             fi
+        done < <(grep -n "^[[:space:]]*${safe_block}[[:space:]]*{" "$CONFIG_FILE")
+        
+        # FIX: "Silent Failure Trap" - Return error if key not found
+        if (( found == 0 )); then
+            return 1
         fi
     else
         # Global key update (no block context)
         sed --follow-symlinks -i \
-            "s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)\([^#]*\)|\1${safe_val} |" \
+            "s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)[^#]*|\1${safe_val} |" \
             "$CONFIG_FILE"
     fi
 
+    # Update cache on success
     CONFIG_CACHE["$key|$block"]=$new_val
     if [[ -z $block ]]; then
         CONFIG_CACHE["$key|"]=$new_val
     fi
+    
+    return 0
 }
 
 load_tab_values() {
@@ -301,8 +378,22 @@ load_tab_values() {
 
     for item in "${items_ref[@]}"; do
         IFS='|' read -r key type block _ _ _ <<< "${ITEM_MAP[$item]}"
+        
+        # Try exact match first (key|block)
         val=${CONFIG_CACHE["$key|$block"]:-}
-        VALUE_CACHE["$item"]=${val:-unset}
+        
+        # If empty and no specific block required, try blockless lookup
+        if [[ -z $val && -z $block ]]; then
+            val=${CONFIG_CACHE["$key|"]:-}
+        fi
+        
+        # FIX: Use distinct marker so user knows value wasn't detected
+        # This helps debug config parsing issues
+        if [[ -z $val ]]; then
+            VALUE_CACHE["$item"]=$UNSET_MARKER
+        else
+            VALUE_CACHE["$item"]=$val
+        fi
     done
 }
 
@@ -313,7 +404,12 @@ modify_value() {
 
     IFS='|' read -r key type block min max step <<< "${ITEM_MAP[$label]}"
     current=${VALUE_CACHE[$label]:-}
-    [[ $current == "unset" ]] && current=""
+    
+    # Handle unset values - use default or sensible minimum
+    if [[ $current == "$UNSET_MARKER" || -z $current ]]; then
+        current=${DEFAULTS[$label]:-}
+        [[ -z $current ]] && current=${min:-0}
+    fi
 
     case $type in
         int)
@@ -371,8 +467,10 @@ modify_value() {
             ;;
     esac
 
-    write_value_to_file "$key" "$new_val" "$block"
-    VALUE_CACHE["$label"]=$new_val
+    # FIX: Only update cache if write succeeded
+    if write_value_to_file "$key" "$new_val" "$block"; then
+        VALUE_CACHE["$label"]=$new_val
+    fi
 }
 
 set_absolute_value() {
@@ -380,8 +478,11 @@ set_absolute_value() {
     local key type block
 
     IFS='|' read -r key type block _ _ _ <<< "${ITEM_MAP[$label]}"
-    write_value_to_file "$key" "$new_val" "$block"
-    VALUE_CACHE["$label"]=$new_val
+    
+    # FIX: Only update cache if write succeeded
+    if write_value_to_file "$key" "$new_val" "$block"; then
+        VALUE_CACHE["$label"]=$new_val
+    fi
 }
 
 reset_defaults() {
@@ -486,14 +587,16 @@ draw_ui() {
     # Render Visible Items
     for (( i = visible_start; i < visible_end; i++ )); do
         item=${items_ref[i]}
-        val=${VALUE_CACHE[$item]:-unset}
+        val=${VALUE_CACHE[$item]:-$UNSET_MARKER}
 
+        # FIX: Use distinct yellow warning for unset values
+        # This makes it immediately obvious when config parsing failed
         case $val in
-            true)     display="${C_GREEN}ON${C_RESET}" ;;
-            false)    display="${C_RED}OFF${C_RESET}" ;;
-            unset)    display="${C_RED}unset${C_RESET}" ;;
-            *'$'*)    display="${C_MAGENTA}Dynamic${C_RESET}" ;;
-            *)        display="${C_WHITE}${val}${C_RESET}" ;;
+            true)              display="${C_GREEN}ON${C_RESET}" ;;
+            false)             display="${C_RED}OFF${C_RESET}" ;;
+            "$UNSET_MARKER")   display="${C_YELLOW}⚠ UNSET${C_RESET}" ;;
+            *'$'*)             display="${C_MAGENTA}Dynamic${C_RESET}" ;;
+            *)                 display="${C_WHITE}${val}${C_RESET}" ;;
         esac
 
         printf -v padded_item "%-${ITEM_PADDING}s" "${item:0:$ITEM_PADDING}"
@@ -614,7 +717,6 @@ handle_mouse() {
     local type zone start end
 
     # SGR Mouse Mode (1006)
-    # FIX: Properly escape '[' as \[, don't escape '<'
     if [[ $input =~ ^\[<([0-9]+);([0-9]+);([0-9]+)([Mm])$ ]]; then
         button=${BASH_REMATCH[1]}
         x=${BASH_REMATCH[2]}

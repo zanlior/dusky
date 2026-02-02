@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky Input - Optimized v5.0
+# Dusky Input - Optimized v5.1
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / UWSM
 # Description: Tabbed TUI to modify input.conf.
-# Changelog v5.0:
-#   - LC_NUMERIC=C (Locale Bomb fix)
-#   - Nested block brace-counting (Range Trap fix)
-#   - EOF safety (|| break)
-#   - stty state preservation
-#   - Scrolling viewport with indicators
-#   - Pattern escaping for sed
+# Changelog v5.1:
+#   - FIXED: Multiple blocks with same name (e.g., multiple input{} blocks)
+#   - Now iterates all block instances to find the one containing the key
+#   - Better "unset" detection and display
+#   - Added write verification
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
 
 # CRITICAL FIX: The "Locale Bomb"
-# Force standard C locale for numeric operations.
-# Prevents awk from outputting commas (0,5) in non-US locales.
 export LC_NUMERIC=C
 
 # --- Configuration ---
 readonly CONFIG_FILE="${HOME}/.config/hypr/edit_here/source/input.conf"
 readonly APP_TITLE="Dusky Input"
-readonly APP_VERSION="v5.0"
+readonly APP_VERSION="v5.1"
 
 # UI Layout Constants
 declare -ri MAX_DISPLAY_ROWS=14
@@ -46,6 +42,7 @@ readonly C_CYAN=$'\033[1;36m'
 readonly C_GREEN=$'\033[1;32m'
 readonly C_MAGENTA=$'\033[1;35m'
 readonly C_RED=$'\033[1;31m'
+readonly C_YELLOW=$'\033[1;33m'
 readonly C_WHITE=$'\033[1;37m'
 readonly C_GREY=$'\033[1;30m'
 readonly C_INVERSE=$'\033[7m'
@@ -81,10 +78,8 @@ log_err() {
 }
 
 cleanup() {
-    # Restore terminal state (Mouse, Cursor, Colors)
     printf '%s%s%s' "$MOUSE_OFF" "$CURSOR_SHOW" "$C_RESET"
     
-    # Robustly restore original stty settings
     if [[ -n "${ORIGINAL_STTY:-}" ]]; then
         stty "$ORIGINAL_STTY" 2>/dev/null || :
     fi
@@ -114,6 +109,7 @@ escape_sed_pattern() {
     _s=${_s//\[/\\[}
     _s=${_s//^/\\^}
     _s=${_s//\$/\\\$}
+    _s=${_s//-/\\-}
     _out=$_s
 }
 
@@ -182,13 +178,11 @@ register 4 "Swipe Forever"      "workspace_swipe_forever|bool|gestures|||"
 
 # --- DEFAULTS ---
 DEFAULTS=(
-    # Keyboard
     ["Layout"]="us"
     ["Numlock Default"]="true"
     ["Repeat Rate"]="35"
     ["Repeat Delay"]="250"
     ["Resolve Binds Sym"]="false"
-    # Mouse
     ["Sensitivity"]="0"
     ["Accel Profile"]="adaptive"
     ["Force No Accel"]="false"
@@ -197,13 +191,11 @@ DEFAULTS=(
     ["Mouse Refocus"]="true"
     ["Mouse Nat Scroll"]="false"
     ["Scroll Method"]="2fg"
-    # Touchpad
     ["TP Nat Scroll"]="true"
     ["Tap to Click"]="true"
     ["Disable While Typing"]="true"
     ["Clickfinger Behav"]="false"
     ["Drag Lock"]="false"
-    # Cursor
     ["No HW Cursors"]="2"
     ["Use CPU Buffer"]="2"
     ["Hide On Key"]="false"
@@ -211,7 +203,6 @@ DEFAULTS=(
     ["Warp On Change"]="0"
     ["No Break VRR"]="2"
     ["Zoom Factor"]="1.0"
-    # Gestures
     ["Swipe Distance"]="300"
     ["Swipe Cancel Ratio"]="0.5"
     ["Swipe Invert"]="true"
@@ -223,13 +214,19 @@ DEFAULTS=(
 
 populate_config_cache() {
     CONFIG_CACHE=()
-    local key_part value_part key_name
+    local key_part value_part key_name block_name composite_key
 
-    while IFS='=' read -r key_part value_part; do
+    while IFS='=' read -r key_part value_part || [[ -n $key_part ]]; do
         [[ -z $key_part ]] && continue
+        
+        # Store with full composite key (key|block)
         CONFIG_CACHE["$key_part"]=$value_part
 
+        # Also store just by key name for fallback lookup
         key_name=${key_part%%|*}
+        block_name=${key_part#*|}
+        
+        # For unique keys, store without block suffix too
         if [[ -z ${CONFIG_CACHE["$key_name|"]:-} ]]; then
             CONFIG_CACHE["$key_name|"]=$value_part
         fi
@@ -240,6 +237,7 @@ populate_config_cache() {
             line = $0
             sub(/#.*/, "", line)
 
+            # Detect block start: "blockname {"
             if (match(line, /[a-zA-Z0-9_.:-]+[[:space:]]*\{/)) {
                 block_str = substr(line, RSTART, RLENGTH)
                 sub(/[[:space:]]*\{/, "", block_str)
@@ -247,6 +245,7 @@ populate_config_cache() {
                 block_stack[depth] = block_str
             }
 
+            # Parse key = value
             if (line ~ /=/) {
                 eq_pos = index(line, "=")
                 if (eq_pos > 0) {
@@ -261,12 +260,15 @@ populate_config_cache() {
                 }
             }
 
+            # Count closing braces and adjust depth
             n = gsub(/\}/, "}", line)
             while (n > 0 && depth > 0) { depth--; n-- }
         }
     ' "$CONFIG_FILE")
 }
 
+# CRITICAL FIX: Find the CORRECT block instance containing our key
+# Handles multiple blocks with same name (e.g., multiple input{} blocks)
 write_value_to_file() {
     local key=$1 new_val=$2 block=${3:-}
     local current_val=${CONFIG_CACHE["$key|$block"]:-}
@@ -274,59 +276,79 @@ write_value_to_file() {
     # Dirty check: skip write if value unchanged
     [[ "$current_val" == "$new_val" ]] && return 0
 
-    local safe_val safe_key safe_block
+    local safe_val safe_key
     escape_sed_replacement "$new_val" safe_val
     escape_sed_pattern "$key" safe_key
 
     if [[ -n $block ]]; then
+        local safe_block
         escape_sed_pattern "$block" safe_block
         
-        # CRITICAL FIX: The "Nested Block Range Trap"
-        # Count braces to find exact block boundaries instead of stopping at first }
-        local start_line
-        start_line=$(grep -n "^[[:space:]]*${safe_block}[[:space:]]*{" "$CONFIG_FILE" | head -n1 | cut -d: -f1)
+        # CRITICAL FIX: Iterate through ALL block instances, not just the first
+        local line_num block_start block_end found=0
         
-        if [[ -n $start_line ]]; then
-            local end_line_offset
+        while IFS=: read -r line_num _; do
+            block_start=$line_num
             
-            end_line_offset=$(tail -n "+$start_line" "$CONFIG_FILE" | awk '
-                BEGIN { depth=0; found=0 }
+            # Calculate block end using proper brace counting
+            block_end=$(tail -n "+${block_start}" "$CONFIG_FILE" | awk '
+                BEGIN { depth = 0; started = 0 }
                 {
                     txt = $0
                     sub(/#.*/, "", txt)
-
+                    
                     n_open = gsub(/{/, "&", txt)
                     n_close = gsub(/}/, "&", txt)
                     
-                    depth += n_open - n_close
+                    if (NR == 1) {
+                        depth = n_open
+                        started = 1
+                    } else {
+                        depth += n_open - n_close
+                    }
                     
-                    if (NR == 1) found=1
-                    
-                    if (found && depth <= 0) {
+                    if (started && depth <= 0) {
                         print NR
                         exit
                     }
                 }
             ')
             
-            if [[ -n $end_line_offset ]]; then
-                local -i real_end_line=$(( start_line + end_line_offset - 1 ))
+            [[ -z $block_end ]] && continue
+            
+            local -i real_end=$(( block_start + block_end - 1 ))
+            
+            # Check if THIS specific block instance contains our key
+            if sed -n "${block_start},${real_end}p" "$CONFIG_FILE" | \
+               grep -q "^[[:space:]]*${safe_key}[[:space:]]*="; then
                 
+                # Found it! Apply substitution only to this block range
                 sed --follow-symlinks -i \
-                    "${start_line},${real_end_line}s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)\([^#]*\)|\1${safe_val} |" \
+                    "${block_start},${real_end}s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)[^#]*|\1${safe_val} |" \
                     "$CONFIG_FILE"
+                found=1
+                break
             fi
+        done < <(grep -n "^[[:space:]]*${safe_block}[[:space:]]*{" "$CONFIG_FILE")
+        
+        if (( found == 0 )); then
+            # Key not found in any block of this type - could log this
+            return 1
         fi
     else
+        # No block specified - global search/replace
         sed --follow-symlinks -i \
-            "s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)\([^#]*\)|\1${safe_val} |" \
+            "s|^\([[:space:]]*${safe_key}[[:space:]]*=[[:space:]]*\)[^#]*|\1${safe_val} |" \
             "$CONFIG_FILE"
     fi
 
+    # Update cache
     CONFIG_CACHE["$key|$block"]=$new_val
     if [[ -z $block ]]; then
         CONFIG_CACHE["$key|"]=$new_val
     fi
+    
+    return 0
 }
 
 load_tab_values() {
@@ -335,8 +357,21 @@ load_tab_values() {
 
     for item in "${items_ref[@]}"; do
         IFS='|' read -r key type block _ _ _ <<< "${ITEM_MAP[$item]}"
+        
+        # Try exact match first (key|block)
         val=${CONFIG_CACHE["$key|$block"]:-}
-        VALUE_CACHE["$item"]=${val:-unset}
+        
+        # If empty and no block, try just the key
+        if [[ -z $val && -z $block ]]; then
+            val=${CONFIG_CACHE["$key|"]:-}
+        fi
+        
+        # Mark as unset if truly not found
+        if [[ -z $val ]]; then
+            VALUE_CACHE["$item"]="«unset»"
+        else
+            VALUE_CACHE["$item"]=$val
+        fi
     done
 }
 
@@ -347,7 +382,12 @@ modify_value() {
 
     IFS='|' read -r key type block min max step <<< "${ITEM_MAP[$label]}"
     current=${VALUE_CACHE[$label]:-}
-    [[ $current == "unset" ]] && current=""
+    
+    # Handle unset values - use default or sensible minimum
+    if [[ $current == "«unset»" || -z $current ]]; then
+        current=${DEFAULTS[$label]:-}
+        [[ -z $current ]] && current=${min:-0}
+    fi
 
     case $type in
         int)
@@ -390,8 +430,9 @@ modify_value() {
         *) return 0 ;;
     esac
 
-    write_value_to_file "$key" "$new_val" "$block"
-    VALUE_CACHE["$label"]=$new_val
+    if write_value_to_file "$key" "$new_val" "$block"; then
+        VALUE_CACHE["$label"]=$new_val
+    fi
 }
 
 set_absolute_value() {
@@ -399,8 +440,9 @@ set_absolute_value() {
     local key type block
 
     IFS='|' read -r key type block _ _ _ <<< "${ITEM_MAP[$label]}"
-    write_value_to_file "$key" "$new_val" "$block"
-    VALUE_CACHE["$label"]=$new_val
+    if write_value_to_file "$key" "$new_val" "$block"; then
+        VALUE_CACHE["$label"]=$new_val
+    fi
 }
 
 reset_defaults() {
@@ -475,14 +517,12 @@ draw_ui() {
         (( SELECTED_ROW < 0 )) && SELECTED_ROW=0
         (( SELECTED_ROW >= count )) && SELECTED_ROW=$(( count - 1 ))
 
-        # Auto-scroll to keep selection visible
         if (( SELECTED_ROW < SCROLL_OFFSET )); then
             SCROLL_OFFSET=$SELECTED_ROW
         elif (( SELECTED_ROW >= SCROLL_OFFSET + MAX_DISPLAY_ROWS )); then
             SCROLL_OFFSET=$(( SELECTED_ROW - MAX_DISPLAY_ROWS + 1 ))
         fi
 
-        # Clamp scroll offset
         (( SCROLL_OFFSET < 0 )) && SCROLL_OFFSET=0
         local -i max_scroll=$(( count - MAX_DISPLAY_ROWS ))
         (( max_scroll < 0 )) && max_scroll=0
@@ -503,14 +543,14 @@ draw_ui() {
     # Render Visible Items
     for (( i = visible_start; i < visible_end; i++ )); do
         item=${items_ref[i]}
-        val=${VALUE_CACHE[$item]:-unset}
+        val=${VALUE_CACHE[$item]:-«unset»}
 
         case $val in
-            true)     display="${C_GREEN}ON${C_RESET}" ;;
-            false)    display="${C_RED}OFF${C_RESET}" ;;
-            unset)    display="${C_RED}unset${C_RESET}" ;;
-            *'$'*)    display="${C_MAGENTA}Dynamic${C_RESET}" ;;
-            *)        display="${C_WHITE}${val}${C_RESET}" ;;
+            true)       display="${C_GREEN}ON${C_RESET}" ;;
+            false)      display="${C_RED}OFF${C_RESET}" ;;
+            "«unset»")  display="${C_YELLOW}⚠ UNSET${C_RESET}" ;;
+            *'$'*)      display="${C_MAGENTA}Dynamic${C_RESET}" ;;
+            *)          display="${C_WHITE}${val}${C_RESET}" ;;
         esac
 
         printf -v padded_item "%-${ITEM_PADDING}s" "${item:0:$ITEM_PADDING}"
@@ -522,7 +562,7 @@ draw_ui() {
         fi
     done
 
-    # Pad remaining rows to maintain stable height
+    # Pad remaining rows
     local -i rows_rendered=$(( visible_end - visible_start ))
     for (( i = rows_rendered; i < MAX_DISPLAY_ROWS; i++ )); do
         buf+="${CLR_EOL}"$'\n'
@@ -618,7 +658,6 @@ handle_mouse() {
             done
         fi
 
-        # Item click detection (accounting for scroll indicator offset)
         local -n items_ref="TAB_ITEMS_${CURRENT_TAB}"
         local -i count=${#items_ref[@]}
         local -i item_row_start=$(( ITEM_START_ROW + 1 ))
@@ -664,7 +703,6 @@ main() {
     while true; do
         draw_ui
 
-        # Safety: break on EOF to prevent 100% CPU loops
         IFS= read -rsn1 key || break
 
         if [[ $key == $'\x1b' ]]; then
