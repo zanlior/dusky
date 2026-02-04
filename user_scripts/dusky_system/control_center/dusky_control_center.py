@@ -16,6 +16,7 @@ Daemon & Optimization Features (Implemented):
 - SINGLE INSTANCE: Uses Gtk.Application uniqueness. Second launch simply raises existing window.
 - RAM EFFICIENCY: Hides window on close; garbage collects to free memory.
 - DAEMON MODE: Process stays alive in background (sleeping) when window is closed.
+- KEEPALIVE: self.hold() prevents GApplication 10s service timeout.
 """
 from __future__ import annotations
 
@@ -283,6 +284,10 @@ class DuskyControlCenter(Adw.Application):
         """GTK Startup hook. Initialize StyleManager to prevent legacy warnings."""
         Adw.Application.do_startup(self)
         Adw.StyleManager.get_default().set_color_scheme(Adw.ColorScheme.DEFAULT)
+
+        # DAEMON FIX: Explicitly hold the application to prevent 10s timeout
+        # when running with --gapplication-service without an active window.
+        self.hold()
 
     def do_activate(self) -> None:
         """

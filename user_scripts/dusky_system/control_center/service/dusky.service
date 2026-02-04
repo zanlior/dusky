@@ -5,26 +5,24 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-# CRITICAL: This MUST match the APP_ID in your Python script. DO NOT CHANGE.
-Type=dbus
-BusName=com.github.dusky.controlcenter
+# CRITICAL FIX: Changed from 'dbus' to 'simple'. 
+# This prevents Systemd from killing the app if it doesn't signal the bus immediately.
+Type=simple
 
 # CRITICAL: Forces Python to flush logs immediately for real-time debugging
 Environment=PYTHONUNBUFFERED=1
 
-# Memory accounting ram
+# ENABLE RAM TRACKING
 MemoryAccounting=yes
 
 # The %h specifier automatically inserts your home directory path
 ExecStart=%h/user_scripts/dusky_system/control_center/dusky_control_center.py --gapplication-service
 
-# Fail fast if it hangs on startup (10s), then restart automatically
-TimeoutStartSec=10
-Restart=on-failure
+# Restart automatically if it crashes
+Restart=always
 RestartSec=3
 
-# I changed this to 'dusky' to match your service name.
-# This determines how it shows up in logs (e.g. "dusky[123]: ...")
+# Logs will show up as "dusky[PID]: ..."
 SyslogIdentifier=dusky
 
 # Better process scheduling group
