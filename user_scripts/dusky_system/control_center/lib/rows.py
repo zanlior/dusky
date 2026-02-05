@@ -21,6 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     Callable,
     Final,
     NotRequired,
@@ -202,7 +203,9 @@ class RowProperties(TypedDict, total=False):
     max: float
     step: float
     default: float
-    debounce: bool  # Added for instant slider updates
+    debounce: bool
+    options: list[str]  # Added for SelectionRow
+    placeholder: str    # Added for EntryRow logic
 
 
 class RowContext(TypedDict, total=False):
@@ -992,13 +995,10 @@ class SliderRow(BaseActionRow):
                 final_cmd = str(cmd).replace("{value}", str(int(value)))
 
                 # OPTIMIZATION: Fast Path Execution for Background Commands
-                # If command is not terminal-based, we bypass the heavy utility.execute_command
-                # wrapper (which involves UWSM/setsid overhead) and run directly.
                 is_terminal = bool(self.on_action.get("terminal", False))
                 if is_terminal:
                     utility.execute_command(final_cmd, "Slider", True)
                 else:
-                    # Fire-and-forget directly to OS
                     subprocess.Popen(
                         final_cmd,
                         shell=True,
@@ -1007,6 +1007,163 @@ class SliderRow(BaseActionRow):
                     )
 
         return GLib.SOURCE_REMOVE
+
+
+class SelectionRow(DynamicIconMixin, Adw.ComboRow):
+    """Row with a dropdown selection menu."""
+
+    __gtype_name__ = "DuskySelectionRow"
+
+    def __init__(
+        self,
+        properties: RowProperties,
+        on_change: ActionConfig | None = None,
+        context: RowContext | None = None,
+    ) -> None:
+        super().__init__()
+        self.add_css_class("action-row")
+
+        self._state = WidgetState()
+        self.properties = properties
+        self.on_action: ActionConfig = on_change or {}
+        self.context: RowContext = context or {}
+        self.toast_overlay: Adw.ToastOverlay | None = self.context.get("toast_overlay")
+
+        # Independent Setup (copied logic to avoid MRO issues with BaseActionRow)
+        title = str(properties.get("title", "Unnamed"))
+        self.set_title(GLib.markup_escape_text(title))
+        if sub := properties.get("description", ""):
+            self.set_subtitle(GLib.markup_escape_text(str(sub)))
+
+        icon_config = properties.get("icon", DEFAULT_ICON)
+        self.icon_widget = self._create_icon_widget(icon_config)
+        self.add_prefix(self.icon_widget)
+
+        # Selection Setup
+        options = properties.get("options", [])
+        if options and isinstance(options, list):
+            self.set_model(Gtk.StringList.new([str(x) for x in options]))
+
+        self.connect("notify::selected", self._on_selected)
+
+        # Start dynamic icon
+        if _is_dynamic_icon(icon_config) and isinstance(icon_config, dict):
+            self._start_icon_update_loop(icon_config)
+
+    def _create_icon_widget(self, icon: object) -> Gtk.Image:
+        """Create the prefix icon widget based on configuration."""
+        if isinstance(icon, dict) and icon.get("type") == "file":
+            if path := icon.get("path"):
+                p = _expand_path(str(path))
+                if p.exists():
+                    img = Gtk.Image.new_from_file(str(p))
+                    img.add_css_class("action-row-prefix-icon")
+                    return img
+
+        icon_name = _resolve_static_icon_name(icon)
+        img = Gtk.Image.new_from_icon_name(icon_name)
+        img.add_css_class("action-row-prefix-icon")
+        return img
+
+    def _on_selected(self, _row: Adw.ComboRow, _param: Any) -> None:
+        model = self.get_model()
+        if not model:
+            return
+
+        idx = self.get_selected()
+        if idx == -1:
+            return
+
+        item = model.get_string(idx)
+
+        if isinstance(self.on_action, dict) and (cmd := self.on_action.get("command")):
+            final_cmd = str(cmd).replace("{value}", item)
+            utility.execute_command(
+                final_cmd,
+                "Selection",
+                bool(self.on_action.get("terminal", False)),
+            )
+
+    def do_unroot(self) -> None:
+        sources = self._state.mark_destroyed_and_get_sources()
+        _batch_source_remove(*sources)
+        Adw.ComboRow.do_unroot(self)
+
+
+class EntryRow(DynamicIconMixin, Adw.EntryRow):
+    """Row with text input and an apply button."""
+
+    __gtype_name__ = "DuskyEntryRow"
+
+    def __init__(
+        self,
+        properties: RowProperties,
+        on_action: ActionConfig | None = None,
+        context: RowContext | None = None,
+    ) -> None:
+        super().__init__()
+        self.add_css_class("action-row")
+
+        self._state = WidgetState()
+        self.properties = properties
+        self.on_action: ActionConfig = on_action or {}
+        self.context: RowContext = context or {}
+        self.toast_overlay: Adw.ToastOverlay | None = self.context.get("toast_overlay")
+
+        title = str(properties.get("title", "Unnamed"))
+        self.set_title(GLib.markup_escape_text(title))
+
+        icon_config = properties.get("icon", DEFAULT_ICON)
+        self.icon_widget = self._create_icon_widget(icon_config)
+        self.add_prefix(self.icon_widget)
+
+        # Entry Setup
+        self.set_show_apply_button(False)  # We use custom button for consistency
+        btn_text = str(properties.get("button_text", "Apply"))
+        btn = Gtk.Button(label=btn_text)
+        btn.add_css_class("suggested-action")
+        btn.set_valign(Gtk.Align.CENTER)
+        btn.connect("clicked", self._on_apply)
+        self.add_suffix(btn)
+
+        # Start dynamic icon
+        if _is_dynamic_icon(icon_config) and isinstance(icon_config, dict):
+            self._start_icon_update_loop(icon_config)
+
+    def _create_icon_widget(self, icon: object) -> Gtk.Image:
+        """Create the prefix icon widget based on configuration."""
+        if isinstance(icon, dict) and icon.get("type") == "file":
+            if path := icon.get("path"):
+                p = _expand_path(str(path))
+                if p.exists():
+                    img = Gtk.Image.new_from_file(str(p))
+                    img.add_css_class("action-row-prefix-icon")
+                    return img
+
+        icon_name = _resolve_static_icon_name(icon)
+        img = Gtk.Image.new_from_icon_name(icon_name)
+        img.add_css_class("action-row-prefix-icon")
+        return img
+
+    def _on_apply(self, _btn: Gtk.Button) -> None:
+        text = self.get_text()
+        if not text:
+            return
+
+        if isinstance(self.on_action, dict) and (cmd := self.on_action.get("command")):
+            final_cmd = str(cmd).replace("{value}", text)
+            success = utility.execute_command(
+                final_cmd,
+                "Entry",
+                bool(self.on_action.get("terminal", False)),
+            )
+            # Optional: We could clear the text on success, but often users
+            # want to keep it or edit it slightly.
+
+    def do_unroot(self) -> None:
+        sources = self._state.mark_destroyed_and_get_sources()
+        _batch_source_remove(*sources)
+        Adw.EntryRow.do_unroot(self)
 
 
 class NavigationRow(BaseActionRow):
@@ -1117,6 +1274,10 @@ class ExpanderRow(DynamicIconMixin, Adw.ExpanderRow):
                     return LabelRow(props, item.get("value"), self.context)
                 case "slider":
                     return SliderRow(props, item.get("on_change"), self.context)
+                case "selection":
+                    return SelectionRow(props, item.get("on_change"), self.context)
+                case "entry":
+                    return EntryRow(props, item.get("on_action"), self.context)
                 case "navigation":
                     return NavigationRow(props, item.get("layout"), self.context)
                 case "expander":
