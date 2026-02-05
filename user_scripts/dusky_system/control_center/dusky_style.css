@@ -4,13 +4,6 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   DESIGN TOKENS — Using Libadwaita System Colors
-   ───────────────────────────────────────────────────────────────────────────── */
-@define-color dusky_destructive @error_color;
-@define-color dusky_destructive_fg @error_fg_color;
-@define-color dusky_warning @warning_color;
-
-/* ─────────────────────────────────────────────────────────────────────────────
    SCROLLBAR — Minimal & Elegant
    ───────────────────────────────────────────────────────────────────────────── */
 scrollbar {
@@ -109,12 +102,14 @@ scrollbar:backdrop slider {
 }
 
 .sidebar-row-label {
-    font-size: 0.95rem;
+    font-size: 0.95em;
     font-weight: 500;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
    SEARCH BAR — Pill-Shaped Entry
+   NOTE: Selectors like `searchbar > revealer > box` target internal widget
+   structure and may require updates if Libadwaita internals change.
    ───────────────────────────────────────────────────────────────────────────── */
 searchbar {
     background: transparent;
@@ -155,8 +150,7 @@ searchbar entry:backdrop {
 
 .content-title {
     font-weight: 800;
-    font-size: 1.25rem;
-    letter-spacing: -0.02em;
+    font-size: 1.25em;
     opacity: 0.95;
 }
 
@@ -166,19 +160,15 @@ searchbar entry:backdrop {
 
 /* ─────────────────────────────────────────────────────────────────────────────
    PREFERENCES GROUPS — Section Headers
+   NOTE: These selectors target Libadwaita internals. The internal structure
+   of AdwPreferencesGroup may change in future library versions.
    ───────────────────────────────────────────────────────────────────────────── */
 preferencesgroup > box > label.title {
     font-weight: 700;
-    font-size: 0.75rem;
-    letter-spacing: 0.08em;
-    /* NOTE: text-transform not supported in GTK CSS */
+    font-size: 0.75em;
     color: alpha(@window_fg_color, 0.45);
     margin-bottom: 10px;
     margin-top: 14px;
-}
-
-preferencesgroup > box > label.title:first-child {
-    margin-top: 4px;
 }
 
 preferencespage clamp > box {
@@ -195,9 +185,9 @@ row.action-row {
     transition: background-color 150ms ease-out, border-color 150ms ease-out;
 
     /* GROUPING LOGIC (The "Curved Group" Effect) */
-    margin: 0;                /* Remove spacing between items so they touch */
-    border-radius: 0;         /* Reset corners to square by default */
-    border-bottom-width: 0;   /* Prevent double borders between items */
+    margin: 0;
+    border-radius: 0;
+    border-bottom-width: 0;
 }
 
 /* Top Item: Curve top corners only */
@@ -223,7 +213,6 @@ row.action-row:only-child {
 row.action-row:hover {
     background-color: alpha(@card_bg_color, 0.7);
     border-color: alpha(@borders, 0.55);
-    z-index: 1; /* Ensure hovered border draws on top of neighbors */
 }
 
 row.action-row:active {
@@ -261,7 +250,7 @@ row.action-row:hover .action-row-prefix-icon {
     border-radius: 8px;
     padding: 5px 16px;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.9em;
     transition: background-color 150ms ease-out,
                 border-color 150ms ease-out,
                 box-shadow 150ms ease-out;
@@ -403,13 +392,13 @@ scale:backdrop highlight {
 
 .hero-title {
     font-weight: 700;
-    font-size: 0.8rem;
+    font-size: 0.8em;
     color: @window_fg_color;
 }
 
 .hero-subtitle {
     font-weight: 500;
-    font-size: 0.72rem;
+    font-size: 0.72em;
     color: alpha(@window_fg_color, 0.55);
     margin-top: 3px;
 }
@@ -492,13 +481,13 @@ scale:backdrop highlight {
 
 .warning-banner-box .title-1 {
     font-weight: 700;
-    font-size: 1.05rem;
+    font-size: 1.05em;
     color: @window_fg_color;
     margin-top: 6px;
 }
 
 .warning-banner-box .body {
-    font-size: 0.88rem;
+    font-size: 0.88em;
     color: alpha(@window_fg_color, 0.75);
     margin-top: 3px;
 }
@@ -523,13 +512,13 @@ scale:backdrop highlight {
 
 .empty-state-title {
     font-weight: 700;
-    font-size: 1.2rem;
+    font-size: 1.2em;
     color: alpha(@window_fg_color, 0.75);
     margin-bottom: 6px;
 }
 
 .empty-state-subtitle {
-    font-size: 0.92rem;
+    font-size: 0.92em;
     color: alpha(@window_fg_color, 0.45);
 }
 
