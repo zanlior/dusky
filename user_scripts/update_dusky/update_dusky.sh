@@ -50,6 +50,7 @@ declare -A CUSTOM_SCRIPT_PATHS=(
     ["warp_toggle.sh"]="user_scripts/networking/warp_toggle.sh"
     ["waypaper_config_reset.sh"]="user_scripts/desktop_apps/waypaper_config_reset.sh"
     ["fix_theme_dir.sh"]="user_scripts/misc_extra/fix_theme_dir.sh"
+    ["package_installation.sh"]="user_scripts/misc_extra/package_installation.sh"
     ["copy_service_files.sh"]="user_scripts/misc_extra/copy_service_files.sh"
     ["update_checker.sh"]="user_scripts/update_dusky/update_checker/update_checker.sh"
 )
@@ -273,6 +274,7 @@ declare -ra UPDATE_SEQUENCE=(
     "U | fix_theme_dir.sh"
     "U | copy_service_files.sh --default"
     "U | update_checker.sh --num"
+    "S | package_installation.sh"
 )
 
 # ------------------------------------------------------------------------------
