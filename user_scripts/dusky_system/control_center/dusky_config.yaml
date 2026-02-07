@@ -97,9 +97,11 @@ pages:
         - Balanced
         - Performance
         - Power Saver
+        value_command: "tlpctl get | sed 's/balanced/Balanced/;s/performance/Performance/;s/power-saver/Power Saver/'"
+        interval: 5
       on_change:
         type: exec
-        command: "mode=$(echo '{value}' | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g'); tlpctl \"$mode\" && notify-send 'Power Profile' 'Switched to {value}'"
+        command: "tlpctl $(echo '{value}' | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g') && notify-send 'Power Profile' 'Switched to {value}'"
 
   - type: section
     properties:
@@ -536,9 +538,11 @@ pages:
         - Balanced
         - Performance
         - Power Saver
+        value_command: "tlpctl get | sed 's/balanced/Balanced/;s/performance/Performance/;s/power-saver/Power Saver/'"
+        interval: 5
       on_change:
         type: exec
-        command: "mode=$(echo '{value}' | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g'); tlpctl $mode && notify-send 'Power Profile' 'Switched to {value}'"
+        command: "tlpctl $(echo '{value}' | tr '[:upper:]' '[:lower:]' | sed 's/ /-/g') && notify-send 'Power Profile' 'Switched to {value}'"
     - type: toggle
       properties:
         title: Dusky Power Saver

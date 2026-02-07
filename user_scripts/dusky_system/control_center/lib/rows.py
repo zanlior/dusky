@@ -30,13 +30,13 @@ from typing import (
     TypedDict,
     runtime_checkable,
 )
-from contextlib import suppress
+from contextlib import suppress, contextmanager
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk, Pango
+from gi.repository import Adw, GLib, Gtk, Pango, GObject
 
 import lib.utility as utility
 
@@ -460,7 +460,7 @@ class DynamicIconMixin:
             GLib.idle_add(self._apply_icon_update, new_icon)
 
     def _apply_icon_update(self, new_icon: str) -> bool:
-        """Apply icon update on the main thread."""
+        """Apply icon update on main thread."""
         with self._state.lock:
             if self._state.is_destroyed:
                 return GLib.SOURCE_REMOVE
@@ -1201,7 +1201,7 @@ class SliderRow(SliderMonitorMixin, BaseActionRow):
 
 
 class SelectionRow(DynamicIconMixin, Adw.ComboRow):
-    """Row with a dropdown selection menu."""
+    """Row with a dropdown selection menu and state monitoring."""
 
     __gtype_name__ = "DuskySelectionRow"
 
@@ -1219,27 +1219,39 @@ class SelectionRow(DynamicIconMixin, Adw.ComboRow):
         self.on_action: ActionConfig = on_change or {}
         self.context: RowContext = context or {}
         self.toast_overlay: Adw.ToastOverlay | None = self.context.get("toast_overlay")
+        
+        self._programmatic_update = False
+        self._initial_fetch_done = False
 
-        # Independent Setup (copied logic to avoid MRO issues with BaseActionRow)
+        # Title & Subtitle
         title = str(properties.get("title", "Unnamed"))
         self.set_title(GLib.markup_escape_text(title))
         if sub := properties.get("description", ""):
             self.set_subtitle(GLib.markup_escape_text(str(sub)))
 
+        # Icon Setup
         icon_config = properties.get("icon", DEFAULT_ICON)
         self.icon_widget = self._create_icon_widget(icon_config)
         self.add_prefix(self.icon_widget)
 
-        # Selection Setup
-        options = properties.get("options", [])
-        if options and isinstance(options, list):
-            self.set_model(Gtk.StringList.new([str(x) for x in options]))
+        # Options Setup - Normalize to strings immediately to prevent type mismatch
+        raw_options = properties.get("options", [])
+        self.options_list = [str(x) for x in raw_options] if isinstance(raw_options, list) else []
+        
+        if self.options_list:
+            self.set_model(Gtk.StringList.new(self.options_list))
 
+        # Signal Connections
         self.connect("notify::selected", self._on_selected)
+        # CRITICAL FIX: Ensure fetch runs when widget becomes visible
+        self.connect("map", self._on_map)
 
-        # Start dynamic icon
+        # Start Monitors
         if _is_dynamic_icon(icon_config) and isinstance(icon_config, dict):
             self._start_icon_update_loop(icon_config)
+
+        if properties.get("value_command"):
+            self._start_selection_monitor()
 
     def _create_icon_widget(self, icon: object) -> Gtk.Image:
         """Create the prefix icon widget based on configuration."""
@@ -1256,19 +1268,116 @@ class SelectionRow(DynamicIconMixin, Adw.ComboRow):
         img.add_css_class("action-row-prefix-icon")
         return img
 
-    def _on_selected(self, _row: Adw.ComboRow, _param: Any) -> None:
+    @contextmanager
+    def _suppress_change_signal(self):
+        """Context manager to safely toggle the programmatic update flag."""
+        self._programmatic_update = True
+        try:
+            yield
+        finally:
+            self._programmatic_update = False
+
+    def _start_selection_monitor(self) -> None:
+        """Initialize the selection polling loop."""
+        interval = _safe_int(self.properties.get("interval"), DEFAULT_INTERVAL_SECONDS)
+
+        # Note: We do NOT trigger _fetch_selection_async here immediately.
+        # We rely on the 'map' signal to trigger the first fetch when the widget 
+        # is actually realized. This prevents duplicate processes on startup.
+
+        with self._state.lock:
+            if self._state.is_destroyed:
+                return
+            self._state.monitor_source_id = GLib.timeout_add_seconds(
+                interval, self._check_selection_tick
+            )
+
+    def _on_map(self, _widget: Gtk.Widget) -> None:
+        """Trigger an update whenever the widget becomes visible."""
+        # This ensures the state is fresh every time you switch to this page
+        _submit_task_safe(self._fetch_selection_async, self._state)
+
+    def _check_selection_tick(self) -> bool:
+        """GLib timeout to schedule background fetch."""
+        if not self.get_mapped():
+            return GLib.SOURCE_CONTINUE
+
+        with self._state.lock:
+            if self._state.is_destroyed:
+                return GLib.SOURCE_REMOVE
+
+        _submit_task_safe(self._fetch_selection_async, self._state)
+        return GLib.SOURCE_CONTINUE
+
+    def _fetch_selection_async(self) -> None:
+        """Fetch current status string in background."""
+        cmd = self.properties.get("value_command", "")
+        if not cmd:
+            return
+        
+        try:
+            # Run command with explicit shell execution
+            res = subprocess.run(
+                cmd, 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=SUBPROCESS_TIMEOUT_SHORT
+            )
+            
+            if res.returncode == 0:
+                value = res.stdout.strip()
+                if value:
+                    GLib.idle_add(self._update_selection_ui, value)
+            else:
+                log.warning(f"Selection command failed: {cmd}\nStderr: {res.stderr.strip()}")
+
+        except subprocess.TimeoutExpired:
+            log.warning(f"Selection command timed out: {cmd}")
+        except Exception as e:
+            log.error(f"Selection monitor error: {e}")
+
+    def _update_selection_ui(self, value: str) -> bool:
+        """Update the dropdown selection on main thread."""
+        with self._state.lock:
+            if self._state.is_destroyed:
+                return GLib.SOURCE_REMOVE
+
+        if value not in self.options_list:
+            # This log is critical for debugging why it might be "stuck"
+            log.debug(f"Polled value '{value}' not found in options {self.options_list}")
+            return GLib.SOURCE_REMOVE
+
+        idx = self.options_list.index(value)
+        
+        # Only update if different to avoid UI flicker
+        if self.get_selected() != idx:
+            with self._suppress_change_signal():
+                self.set_selected(idx)
+
+        return GLib.SOURCE_REMOVE
+
+    def _on_selected(self, _row: Adw.ComboRow, _param: GObject.ParamSpec) -> None:
+        """Handle user selection."""
+        if self._programmatic_update:
+            return
+
         model = self.get_model()
         if not model:
             return
 
         idx = self.get_selected()
-        if idx == -1:
+        # GTK4 uses a generic uint max for invalid, checking bounds is safer/easier
+        if idx >= model.get_n_items(): 
             return
 
         item = model.get_string(idx)
 
         if isinstance(self.on_action, dict) and (cmd := self.on_action.get("command")):
-            final_cmd = str(cmd).replace("{value}", item)
+            # Security: Quote the value to prevent shell injection from config strings
+            safe_value = shlex.quote(item)
+            final_cmd = str(cmd).replace("{value}", safe_value)
+            
             utility.execute_command(
                 final_cmd,
                 "Selection",
