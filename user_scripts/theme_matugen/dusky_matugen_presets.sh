@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Dusky Matugen Presets v3.7.1 (Hardened & Audited)
+# Dusky Matugen Presets v3.7.3 (Nav Parity)
 # -----------------------------------------------------------------------------
 # Target: Arch Linux / Hyprland / Matugen
 # Description: High-performance TUI for applying Matugen color schemes.
@@ -16,7 +16,7 @@ export LC_NUMERIC=C
 # =============================================================================
 
 readonly APP_TITLE="Dusky Matugen Presets"
-readonly APP_VERSION="v3.7.1"
+readonly APP_VERSION="v3.7.3"
 
 # --- State Management ---
 readonly USE_STATE_FILE=false
@@ -26,7 +26,8 @@ readonly STATE_FILE="${HOME}/.config/dusky/settings/dusky_theme/state.conf"
 declare -ri MAX_DISPLAY_ROWS=16
 declare -ri BOX_INNER_WIDTH=80
 declare -ri ITEM_PADDING=30
-declare -ri ADJUST_THRESHOLD=40
+# UPDATED: Set to 38 to match Master Template v3.3.2 (Fixes mouse click deadzone)
+declare -ri ADJUST_THRESHOLD=38
 
 # Minimum terminal dimensions
 declare -ri MIN_COLS=82
@@ -639,6 +640,31 @@ navigate() {
     return 0
 }
 
+# ADDED: New function from Master Template (v3.3.2) logic
+navigate_page() {
+    local -i dir=$1
+    local -n _navp_ref="TAB_ITEMS_${CURRENT_TAB}"
+    local -i count=${#_navp_ref[@]}
+
+    (( count == 0 )) && return 0
+    SELECTED_ROW=$(( SELECTED_ROW + dir * MAX_DISPLAY_ROWS ))
+    
+    if (( SELECTED_ROW < 0 )); then SELECTED_ROW=0; fi
+    if (( SELECTED_ROW >= count )); then SELECTED_ROW=$(( count - 1 )); fi
+    return 0
+}
+
+# ADDED: New function from Master Template (v3.3.2) logic
+navigate_end() {
+    local -i target=$1
+    local -n _nave_ref="TAB_ITEMS_${CURRENT_TAB}"
+    local -i count=${#_nave_ref[@]}
+
+    (( count == 0 )) && return 0
+    if (( target == 0 )); then SELECTED_ROW=0; else SELECTED_ROW=$(( count - 1 )); fi
+    return 0
+}
+
 switch_tab() {
     local -i dir=${1:-1}
     CURRENT_TAB=$(( CURRENT_TAB + dir ))
@@ -727,6 +753,7 @@ handle_mouse() {
         if (( clicked_idx >= 0 && clicked_idx < count )); then
             SELECTED_ROW=$clicked_idx
             
+            # UPDATED: Use 38 from template to match click deadzone fix
             if (( CURRENT_TAB == 6 && x > ADJUST_THRESHOLD )); then
                 if (( button == 0 )); then adjust_setting 1; else adjust_setting -1; fi
             else
@@ -759,6 +786,12 @@ read_escape_seq() {
 # =============================================================================
 
 main() {
+    # ADDED: Bash Version Safety Check (Matches Template v3.3.2)
+    if (( BASH_VERSINFO[0] < 5 )); then
+        log_err "Bash 5.0+ required (found ${BASH_VERSION})"
+        exit 1
+    fi
+
     # Check dependencies (removed sed, as it is unused)
     local dep
     for dep in awk matugen; do
@@ -805,6 +838,10 @@ main() {
                 '[B'|'OB')      navigate 1 ;;
                 '[C'|'OC')      adjust_setting 1 ;;
                 '[D'|'OD')      adjust_setting -1 ;;
+                '[5~')          navigate_page -1 ;; # ADDED: Page Up
+                '[6~')          navigate_page 1 ;;  # ADDED: Page Down
+                '[H'|'[1~')     navigate_end 0 ;;   # ADDED: Home
+                '[F'|'[4~')     navigate_end 1 ;;   # ADDED: End
                 '['*'<'*[Mm])   handle_mouse "$escape_seq" ;; # Strict SGR matching
                 *)              ;;
             esac
@@ -814,6 +851,8 @@ main() {
                 j|J)            navigate 1 ;;
                 l|L)            adjust_setting 1 ;;
                 h|H)            adjust_setting -1 ;;
+                g)              navigate_end 0 ;;   # ADDED: vim top
+                G)              navigate_end 1 ;;   # ADDED: vim bottom
                 $'\t')          switch_tab 1 ;;
                 $'\n'|''|' '|o|O) handle_enter ;;
                 q|Q|$'\x03')    break ;;
