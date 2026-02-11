@@ -40,6 +40,8 @@ generate_stress_config() {
 # DUSKY EXTREME STRESS CONFIGURATION
 # -----------------------------------------------------------------------------
 
+mouse = swipe # options: swipe, click, buttons
+
 # [TAB 0] THE WALL (Massive Block)
 # 250 Items will be injected here dynamically
 mass_block {
@@ -163,6 +165,7 @@ register_items() {
     register 1 "Level 5 (Depth 5)" 'val_l5|int|level_4|0|100|1' "50"
     register 1 "Level 6 (Depth 6)" 'val_l6|int|level_5|0|100|1' "60"
     register 1 "Deep Toggle"       'deep_bool|bool|level_5|||'  "false"
+    register 1 "Mouse Mode"        'mouse|cycle||swipe,click,buttons||' "swipe"
 
     # --- TAB 2: MINEFIELD (Edge Cases) ---
     register 2 "Octal 07 (Safe)"   'val_octal_07|int|traps|0|20|1' "7"
