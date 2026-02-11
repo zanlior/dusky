@@ -60,20 +60,49 @@ readonly SELF="$(realpath "${BASH_SOURCE[0]}")"
 
 # Hash command detection (done once)
 if command -v b2sum &>/dev/null; then
-    readonly _HASH_CMD=b2sum
+    readonly _HASH_CMD="b2sum"
 else
-    readonly _HASH_CMD=md5sum
+    readonly _HASH_CMD="md5sum"
 fi
 
+# --- Global Temp File Tracking (Template Pattern) ---
+declare _TMPFILE=""
+
+# --- Invocation Mode Detection ---
+# Determined once at startup so cleanup knows whether kitty_clear is safe.
+# Preview subprocesses must NOT clear kitty images on exit.
+readonly _INVOCATION_MODE="${1:-__main__}"
+
 #==============================================================================
-# HELPERS
+# SYSTEM HELPERS
 #==============================================================================
+log_err() {
+    printf '\e[31m[ERROR]\e[0m %s\n' "$1" >&2
+}
+
+cleanup() {
+    # Secure temp file cleanup (template pattern)
+    if [[ -n "${_TMPFILE:-}" && -f "$_TMPFILE" ]]; then
+        rm -f "$_TMPFILE" 2>/dev/null || :
+    fi
+    # Kitty image protocol cleanup — ONLY for the main interactive session.
+    # Preview subprocesses (--preview) must NOT clear, or they destroy
+    # the image they just rendered before fzf can display it.
+    if [[ "$_INVOCATION_MODE" == "__main__" ]]; then
+        is_kitty && kitty_clear 2>/dev/null || :
+    fi
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 notify() {
     local msg="$1" urgency="${2:-normal}"
     if command -v notify-send &>/dev/null; then
         notify-send -u "$urgency" -a "Clipboard" "📋 Clipboard" "$msg" 2>/dev/null
     fi
-    [[ "$urgency" == "critical" ]] && printf '\e[31mError:\e[0m %s\n' "$msg" >&2
+    [[ "$urgency" == "critical" ]] && log_err "$msg"
 }
 
 check_deps() {
@@ -85,7 +114,7 @@ check_deps() {
         notify "Missing: ${missing[*]}\nInstall: sudo pacman -S fzf wl-clipboard cliphist" "critical"
         exit 1
     fi
-    
+
     # Warn about optional deps once
     local warn_flag="$CACHE_DIR/.warned"
     if [[ ! -f "$warn_flag" ]]; then
@@ -127,36 +156,37 @@ _file_is_image() {
 
 cache_image() {
     local id="$1"
-    
+
     # SECURITY: Prevent path traversal
     [[ "$id" =~ ^[0-9]+$ ]] || return 1
-    
+
     local path="${CACHE_DIR}/${id}.png"
-    
+
     # Cache hit check (reject symlinks)
     if [[ -f "$path" && ! -L "$path" ]]; then
         printf '%s' "$path"
         return 0
     fi
-    
-    # Atomic creation with trap
-    local tmp
-    tmp=$(mktemp "${CACHE_DIR}/tmp.XXXXXX") || return 1
-    trap 'rm -f "$tmp" 2>/dev/null' RETURN
-    
+
+    # Atomic creation with global tracking (template pattern)
+    _TMPFILE=$(mktemp "${CACHE_DIR}/tmp.XXXXXX") || return 1
+
     # FIX: Use pipe with TAB to match cliphist expectation
-    if printf '%s\t\n' "$id" | cliphist decode > "$tmp" 2>/dev/null; then
+    if printf '%s\t\n' "$id" | cliphist decode > "$_TMPFILE" 2>/dev/null; then
         local ftype
-        ftype=$(file -b -- "$tmp" 2>/dev/null)
+        ftype=$(file -b -- "$_TMPFILE" 2>/dev/null)
         if _file_is_image "${ftype:-}"; then
-            if mv -f "$tmp" "$path" 2>/dev/null; then
-                trap - RETURN # Clear trap on success
+            if mv -f "$_TMPFILE" "$path" 2>/dev/null; then
+                _TMPFILE=""
                 printf '%s' "$path"
                 return 0
             fi
         fi
     fi
-    
+
+    # Cleanup on failure
+    rm -f "$_TMPFILE" 2>/dev/null || :
+    _TMPFILE=""
     return 1
 }
 
@@ -172,11 +202,11 @@ display_image() {
     local img="$1"
     local cols="${FZF_PREVIEW_COLUMNS:-40}"
     local rows="${FZF_PREVIEW_LINES:-20}"
-    
+
     [[ ! -f "$img" ]] && { printf '\e[31mImage not found\e[0m\n'; return 1; }
-    
+
     ((rows > 4)) && ((rows -= 3))
-    
+
     if is_kitty && command -v kitten &>/dev/null; then
         kitten icat --clear --transfer-mode=memory --stdin=no \
                     --place="${cols}x${rows}@0x1" "$img" 2>/dev/null
@@ -192,27 +222,27 @@ display_image() {
 #==============================================================================
 cmd_list() {
     local n=0
-    
+
     # --- Pinned Items ---
     local pin hash content preview
     while IFS= read -r pin; do
         [[ -r "$pin" ]] || continue
         ((n++))
-        
+
         hash="${pin##*/}"
         hash="${hash%.pin}"
         content=$(<"$pin") || continue
-        
+
         # Inline sanitization
         preview="${content//$'\n'/ }"
         preview="${preview//$'\r'/}"
         preview="${preview//$'\t'/ }"
         preview="${preview//"$SEP"/ }"
         if ((${#preview} > 55)); then preview="${preview:0:55}…"; fi
-        
+
         printf '%d %s %s%s%s%s%s\n' "$n" "$ICON_PIN" "$preview" "$SEP" "pin" "$SEP" "$hash"
     done < <(find "${PINS_DIR:?}" -maxdepth 1 -name '*.pin' -type f -printf '%T@\t%p\n' 2>/dev/null | sort -rn | cut -f2)
-    
+
     # --- History Items (Zero-Fork Pipeline) ---
     cliphist list 2>/dev/null | awk \
         -v pin_count="$n" \
@@ -221,27 +251,27 @@ cmd_list() {
         -v max_len=55 \
     '
     BEGIN { FS = "\t"; n = 0 }
-    
+
     /^[[:space:]]*$/ { next }
-    
+
     {
         id = $1
         content = ""
         for (i = 2; i <= NF; i++) content = (i == 2) ? $i : (content "\t" $i)
-        
+
         n++
         idx = n + pin_count
-        
+
         # User output is: [[ binary data ... ]] (Space exists)
         if (content ~ /^\[\[ *binary data/) {
-            
+
             # 1. Extract Dimensions (e.g. 1091x430)
             dims = ""
             if (match(content, /[0-9]+[xX][0-9]+/)) {
                 dims = substr(content, RSTART, RLENGTH)
                 gsub(/[xX]/, "×", dims)
             }
-            
+
             # 2. Extract Format
             fmt = ""
             lc = tolower(content)
@@ -251,7 +281,7 @@ cmd_list() {
             else if (index(lc, "webp")) fmt = "WebP"
             else if (index(lc, "bmp")) fmt = "BMP"
             else if (index(lc, "tiff")) fmt = "TIFF"
-            
+
             # 3. Construct Display String
             info = ""
             if (dims != "" && fmt != "") info = dims " " fmt
@@ -266,12 +296,12 @@ cmd_list() {
             gsub(/  +/, " ", content)
             gsub(/^ +| +$/, "", content)
             gsub(sep, " ", content) # Strip separator
-            
+
             if (length(content) > max_len) content = substr(content, 1, max_len) "…"
             printf "%d %s%s%s%s%s\n", idx, content, sep, "txt", sep, id
         }
     }
-    
+
     END {
         if (n == 0 && pin_count == 0) {
             printf "  (clipboard empty)%s%s%s\n", sep, "empty", sep
@@ -285,19 +315,21 @@ cmd_list() {
 #==============================================================================
 cmd_preview() {
     local input="$1"
+
+    # Clear previous kitty image BEFORE rendering new one (not on exit)
     is_kitty && kitty_clear
-    
+
     [[ -z "$input" ]] && { printf '\e[90mNo selection.\e[0m\n'; return 0; }
     [[ "$input" == *"(clipboard empty)"* ]] && {
         printf '\n\e[90mClipboard is empty.\nCopy something to get started!\e[0m\n'; return 0;
     }
-    
+
     # Right-to-Left Parsing for safety
     local type id rest
     id="${input##*"${SEP}"}"
     rest="${input%"${SEP}"*}"
     type="${rest##*"${SEP}"}"
-    
+
     case "$type" in
         pin)
             printf '\e[1;33m━━━ %s PINNED ━━━\e[0m\n\n' "$ICON_PIN"
@@ -353,7 +385,7 @@ cmd_copy() {
     local input="$1" visible type id
     IFS="$SEP" read -r visible type id <<< "$input"
     [[ -z "${type:-}" || -z "${id:-}" ]] && return 1
-    
+
     case "$type" in
         pin)
             [[ -f "$PINS_DIR/${id}.pin" ]] && wl-copy < "$PINS_DIR/${id}.pin"
@@ -373,25 +405,32 @@ cmd_pin() {
     local input="$1" visible type id
     IFS="$SEP" read -r visible type id <<< "$input"
     [[ -z "${type:-}" || -z "${id:-}" ]] && return 1
-    
+
     case "$type" in
         pin)
             rm -f "$PINS_DIR/${id}.pin"
             ;;
         txt)
-            local content hash pin_file tmp_file
+            local content hash pin_file
             # FIX: Included \t to ensure cliphist parses the ID correctly
             content=$(printf '%s\t\n' "$id" | cliphist decode 2>/dev/null) || return 1
             [[ -z "$content" ]] && return 1
-            
+
             hash=$(generate_hash "$content")
             pin_file="$PINS_DIR/${hash}.pin"
-            tmp_file=$(mktemp "${PINS_DIR}/.pin.XXXXXX") || return 1
-            trap "rm -f '$tmp_file' 2>/dev/null" RETURN
-            
-            if printf '%s' "$content" > "$tmp_file"; then
-                mv -f "$tmp_file" "$pin_file"
-                trap - RETURN # Clear trap on success
+
+            # Atomic write with global tracking (template pattern)
+            # CRITICAL: Use cat > target to preserve any symlinks (template pattern)
+            _TMPFILE=$(mktemp "${PINS_DIR}/.pin.XXXXXX") || return 1
+
+            if printf '%s' "$content" > "$_TMPFILE"; then
+                cat "$_TMPFILE" > "$pin_file"
+                rm -f "$_TMPFILE" 2>/dev/null || :
+                _TMPFILE=""
+            else
+                rm -f "$_TMPFILE" 2>/dev/null || :
+                _TMPFILE=""
+                return 1
             fi
             ;;
     esac
@@ -401,7 +440,7 @@ cmd_delete() {
     local input="$1" visible type id
     IFS="$SEP" read -r visible type id <<< "$input"
     [[ -z "${type:-}" || -z "${id:-}" ]] && return 1
-    
+
     case "$type" in
         pin) rm -f "$PINS_DIR/${id}.pin" ;;
         img)
@@ -439,9 +478,7 @@ show_menu() {
         fi
         exec "${term_cmd[@]}"
     fi
-    
-    trap 'is_kitty && kitty_clear' EXIT
-    
+
     local selection
     selection=$(cmd_list | fzf \
         --ansi --reverse --no-sort --exact --no-multi --cycle \
@@ -455,20 +492,25 @@ show_menu() {
         --bind="alt-y:execute-silent('$SELF' --delete {})+reload('$SELF' --list)" \
         --bind="alt-t:execute-silent('$SELF' --wipe)+reload('$SELF' --list)" \
         --bind="esc:abort" --bind="ctrl-c:abort"
-    )
-    
+    ) || true
+
     if [[ -n "$selection" ]]; then
         cmd_copy "$selection"
     fi
 
-    # SAFETY: Only kill the parent process if we are reasonably sure it is 
+    # SAFETY: Only kill the parent process if we are reasonably sure it is
     # the ephemeral kitty window we spawned.
     if [[ -n "${KITTY_PID:-}" || "${TERM:-}" == *kitty* ]]; then
-        kill -15 $PPID 2>/dev/null
+        kill -15 $PPID 2>/dev/null || :
     fi
 }
 
 main() {
+    # Pre-flight: Bash version guard (template pattern)
+    if (( BASH_VERSINFO[0] < 5 )); then
+        log_err "Bash 5.0+ required (found ${BASH_VERSION})"; exit 1
+    fi
+
     case "${1:-}" in
         --list)    cmd_list ;;
         --preview) [[ $# -ge 2 ]] && { shift; cmd_preview "$1"; } ;;
@@ -476,11 +518,11 @@ main() {
         --delete)  [[ $# -ge 2 ]] && { shift; cmd_delete "$1"; } ;;
         --wipe)    cmd_wipe ;;
         --help|-h)
-            echo "Usage: clipboard-manager [launch|--help]"
-            echo "Dependencies: fzf, cliphist, wl-clipboard"
+            printf 'Usage: clipboard-manager [launch|--help]\n'
+            printf 'Dependencies: fzf, cliphist, wl-clipboard\n'
             ;;
         "") check_deps; setup_dirs; show_menu ;;
-        *)  exit 1 ;;
+        *)  log_err "Unknown argument: ${1}"; exit 1 ;;
     esac
 }
 
