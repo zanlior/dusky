@@ -463,23 +463,23 @@ pages:
     items:
     - type: button
       properties:
-        title: 'Step 1: Setup OpenSSH'
-        description: Configure SSH keys and service
-        icon: system-lock-screen-symbolic
-        button_text: "Setup"
-      on_press:
-        type: exec
-        command: kitty --class 02_openssh_setup.sh --hold sh -c $HOME/user_scripts/networking/02_openssh_setup.sh
-        terminal: false
-    - type: button
-      properties:
-        title: 'Step 2: Tailscale Setup'
+        title: 'Step 1: Tailscale Setup'
         description: Configure mesh VPN
         icon: network-vpn-symbolic
         button_text: "Setup"
       on_press:
         type: exec
         command: kitty --class tailscale_setup --hold sh -c "$HOME/user_scripts/networking/01_tailscale_setup.sh"
+        terminal: false
+    - type: button
+      properties:
+        title: 'Step 2: Setup OpenSSH'
+        description: Configure SSH keys and service
+        icon: system-lock-screen-symbolic
+        button_text: "Setup"
+      on_press:
+        type: exec
+        command: kitty --class 02_openssh_setup.sh --hold sh -c $HOME/user_scripts/networking/02_openssh_setup.sh
         terminal: false
     - type: button
       properties:
