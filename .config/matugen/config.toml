@@ -64,9 +64,9 @@ if command -v swaync-client >/dev/null 2>&1; then
 fi
 '''
 
-# [templates.swayosd]
-# input_path  = '~/.config/matugen/templates/swayosd-colors.css'
-# output_path = '~/.config/matugen/generated/swayosd-colors.css'
+[templates.swayosd]
+input_path  = '~/.config/matugen/templates/swayosd-colors.css'
+output_path = '~/.config/matugen/generated/swayosd-colors.css'
 # post_hook   = '~/user_scripts/swayosd/restart_swayosd.sh || true'
 
 [templates.wlogout]
