@@ -194,6 +194,23 @@ activate_ui() {
 # Main Orchestrator
 # -----------------------------------------------------------------------------
 main() {
+    # NEW: Argument parsing logic for Quiet Mode
+    local quiet_mode=0
+    
+    # Simple while loop to parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -q|--quiet)
+                quiet_mode=1
+                shift
+                ;;
+            *)
+                # Unknown arguments are shifted (or you could log an error)
+                shift
+                ;;
+        esac
+    done
+
     preflight_checks || return 1
 
     log_info "Initiating restart for ${C_BOLD}${APP_NAME}${C_RESET}..."
@@ -215,7 +232,12 @@ main() {
     log_info "Waiting for DBus registration (${DBUS_REGISTRATION_DELAY_SEC}s)..."
     sleep "$DBUS_REGISTRATION_DELAY_SEC"
     
-    activate_ui
+    # NEW: Conditional check for UI activation
+    if (( quiet_mode == 0 )); then
+        activate_ui
+    else
+        log_info "Quiet mode enabled. Skipping UI activation."
+    fi
 
     log_ok "Restart sequence complete."
 }
