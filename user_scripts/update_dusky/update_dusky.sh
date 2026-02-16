@@ -184,7 +184,7 @@ declare -ra UPDATE_SEQUENCE=(
     "U | copy_service_files.sh --default"
     "U | update_checker.sh --num"
     "S | package_installation.sh"
-    "U | cc_restart.sh"
+    "U | cc_restart.sh --quiet"
 )
 
 # ==============================================================================
