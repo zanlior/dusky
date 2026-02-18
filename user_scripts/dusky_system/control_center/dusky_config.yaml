@@ -664,11 +664,11 @@ pages:
       on_toggle:
         enabled:
           type: exec
-          command: $HOME/user_scripts/desktop_apps/mouse_button_reverse.sh --left
+          command: $HOME/user_scripts/arch_setup_scripts/scripts/265_mouse_button_reverse.sh --left
           terminal: false
         disabled:
           type: exec
-          command: $HOME/user_scripts/desktop_apps/mouse_button_reverse.sh --right
+          command: $HOME/user_scripts/arch_setup_scripts/scripts/265_mouse_button_reverse.sh --right
           terminal: false
 
 - id: display

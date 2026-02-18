@@ -71,7 +71,6 @@ declare -A CUSTOM_SCRIPT_PATHS=(
     # Then in UPDATE_SEQUENCE add: "S | warp_toggle.sh"
 
     ["warp_toggle.sh"]="user_scripts/networking/warp_toggle.sh"
-    ["waypaper_config_reset.sh"]="user_scripts/desktop_apps/waypaper_config_reset.sh"
     ["fix_theme_dir.sh"]="user_scripts/misc_extra/fix_theme_dir.sh"
     ["package_installation.sh"]="user_scripts/misc_extra/package_installation.sh"
     ["copy_service_files.sh"]="user_scripts/misc_extra/copy_service_files.sh"
@@ -115,7 +114,7 @@ declare -ra UPDATE_SEQUENCE=(
 #    "U | 155_blur_shadow_opacity.sh"
 #    "U | 160_theme_ctl.sh set --defaults"
 #    "U | 165_qtct_config.sh"
-#    "U | 170_waypaper_config_reset.sh"
+    "U | 170_waypaper_config_reset.sh"
     "U | 175_animation_default.sh"
 #    "S | 180_udev_usb_notify.sh"
 #    "U | 185_terminal_default.sh"
