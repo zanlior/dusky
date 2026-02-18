@@ -1,5 +1,6 @@
 {
     "position": "top",
+    "reload_style_on_change": true,
     "margin-top": 8,
     "modules-center": [
         "clock",

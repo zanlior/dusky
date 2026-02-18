@@ -5,6 +5,7 @@
     "name": "waybar",
     "exclusive": true,
     "passthrough": false,
+    "reload_style_on_change": true,
     "gtk-layer-shell": true,
     "height": 40,
     "margin-top": 10,
