@@ -94,9 +94,13 @@ command -v notify-send >/dev/null 2>&1 || NEEDED_DEPS+=("libnotify")
 # If these are missing, the pip install step WILL fail.
 if [[ ! -f "$BASE_DIR/.build_marker_v5" ]]; then
     command -v gcc >/dev/null 2>&1 || NEEDED_DEPS+=("gcc")
-    if ! pacman -Qq sdl2 >/dev/null 2>&1; then
-        NEEDED_DEPS+=("sdl2" "sdl2_mixer" "sdl2_image" "sdl2_ttf")
-    fi
+    
+    sdl_deps=("sdl2" "sdl2_mixer" "sdl2_image" "sdl2_ttf")
+    for dep in "${sdl_deps[@]}"; do
+        if ! pacman -Qq "$dep" >/dev/null 2>&1; then
+            NEEDED_DEPS+=("$dep")
+        fi
+    done
 fi
 
 if (( ${#NEEDED_DEPS[@]} > 0 )); then
