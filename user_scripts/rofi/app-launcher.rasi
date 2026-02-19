@@ -170,8 +170,8 @@ textbox {
    ===================================================================== */
 
 listview {
-    columns:            3;
-    lines:              4;
+    columns:            4;
+    lines:              3;
     cycle:              true;
     scrollbar:          false;
     spacing:            8px;
@@ -185,9 +185,10 @@ listview {
 element {
     padding:            8px 12px;
     border-radius:      8px;
+    orientation:        vertical;
     cursor:             pointer;
     /* Reduce spacing between icon and text */
-    spacing:            6px;
+    spacing:            8px;
     border:             0;
 }
 
